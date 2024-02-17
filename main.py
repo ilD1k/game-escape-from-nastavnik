@@ -1,106 +1,129 @@
-from ursina import * 
+from ursina import *
 from ursina.prefabs.first_person_controller import FirstPersonController
 from random import randint
 from random import uniform
 import subprocess
+from ursina.prefabs.health_bar import HealthBar
+
 subprocess.call("key.mp3", shell=True)
+editor_camera = EditorCamera(enabled=False, ignore_paused=True)
 
 app = Ursina()
 Sky()
 ground = Entity(
-	model = "plane",
-	texture = "assets/esss.jfif",
-	collider = "mesh",
-	scale = (100,1,100))
+    model="plane",
+    texture="assets/esss.jfif",
+    collider="mesh",
+    scale=(100, 1, 100))
 
-player = FirstPersonController(position = (0,2,-5))
+player = FirstPersonController(position=(0, 2, -5), speed=12)
+
+
+
+#gun = Entity(model='sphere',texture="assets/akk47.png", parent=camera, position=(.5,-.25,.25), scale=(0.5), origin_z=-.5,  on_cooldown=False)
+gun = Entity(
+    model="sphere",
+    texture="assets/akk47.png",
+    parent=camera,
+    position=(.5,-.25,.25),
+    scale=(0.5),
+    origin_z=-.5,
+    on_cooldown=False
+)
+
+
+gun.muzzle_flash = Entity(parent=gun, z=1, world_scale=.5, model='quad', color=color.yellow, enabled=False)
+
+shootables_parent = Entity()
+mouse.traverse_target = shootables_parent
+
+
 
 wall1 = Entity(
-	model = "cube",
-	texture = "assets/esss.jfif",
-	collider = "cube",
-	scale = (100,10,5),
-	position = (0,5,50))
+    model="cube",
+    texture="assets/esss.jfif",
+    collider="cube",
+    scale=(100, 10, 5),
+    position=(0, 5, 50))
 
 wall2 = duplicate(wall1, z=-50)
 wall3 = duplicate(wall1, rotation_y=90, x=-50, z=0)
 wall4 = duplicate(wall3, x=50)
-wall5 = Entity(
-	model = "cube",
-	texture = "assets/esss.jfif",
-	collider = "cube",
-	scale = (20,5,0.5),
-	position = (0,2,0))
 
-weapon = Entity(
-	model = "sphere",
-	parent = camera.ui,
-	scale = 0.5,
-	color=color.gold,
-	#texture="white_cube",
-	texture="assets/akk47.png",
-	position=(1000, 10),
-	rotation=(-10,-20,-10))
-
-enemies = []
-objects = []
-for i in range(10):
-	enemy = Entity(
-		model = "cube",
-		texture = "assets/python.png",
-		scale = (2,2,2),
-		collider = "box",
-		position = (uniform(-45,45), 1, uniform(33,45)))
-
-	asObject=Entity(
-		model='assets/python.png',
-		collider = "box",
-		parent=enemy,
-		scale=(2,2,2),
-		position = (0,30,0))
-
-	asObject.visiable = False
-	enemy.lookAt(player)
-	enemy.rotation_x = 27000000
-	enemy.rotation_z = 50000000
-	enemies.append(enemy)
-	objects.append(asObject)
 
 def update():
-	if held_keys['left mouse']:
-		weapon.position = (0.75, -0.55)
-	else:
-		weapon.position = (0.8, -0.6)
-	if player.y <-5:
-		player.y=2
-	for enemy in enemies:
-		if enemy.visible:
-			enemy.lookAt(player)
-			enemy.rotation_x = 270
-			enemy.rotation_z = 5
-			dist = distance(enemy, player)
-			if dist > 10:
-				diff_x = player.x - enemy.x
-				diff_z = player.z - enemy.z
-				enemy.x += 0.0001*diff_x
-				enemy.z += 0.0001*diff_z
+    if held_keys['left mouse']:
+        shoot()
 
-def respawnEnemy(enemy):
-	enemy.visible=True
+def shoot():
+    if not gun.on_cooldown:
+        gun.on_cooldown = True
+        gun.muzzle_flash.enabled=True
+        from ursina.prefabs.ursfx import ursfx
+        ursfx([(0.0, 0.0), (0.1, 0.9), (0.15, 0.75), (0.3, 0.14), (0.6, 0.0)], volume=0.5, wave='noise', pitch=random.uniform(-13,-12), pitch_change=-12, speed=3.0)
+        invoke(gun.muzzle_flash.disable, delay=.05)
+        invoke(setattr, gun, 'on_cooldown', False, delay=.15)
+        if mouse.hovered_entity and hasattr(mouse.hovered_entity, 'hp'):
+            mouse.hovered_entity.hp -= 10
+            mouse.hovered_entity.blink(color.red)
 
-def input(key):
-	if key == 'left mouse down':
-		for obj, en in zip(objects, enemies):
-			if en.hovered:
-				en.position = (uniform(-45,45), 1, uniform(33,45))
-				en.visible=False
-				invoke(respawnEnemy,en,delay=3)
-			dust = Entity(model=Circle(),
-				parent=camera.ui,
-				scale=0.03,
-				color=color.yellow,
-				position=(0.14,-0.05))
-			dust.animate_scale(0.001, duration=.1,curve=curve.linear)
-			dust.fade_out(5)
+
+
+class Enemy(Entity):
+    def __init__(self, **kwargs):
+        super().__init__(parent=shootables_parent, model='cube', scale_y=2, origin_y=-.5, texture="assets/python.png", collider='box', **kwargs)
+        self.health_bar = Entity(parent=self, y=1.2, model='cube', color=color.red, world_scale=(1.5,.1,.1))
+        self.max_hp = 100
+        self.hp = self.max_hp
+
+    def update(self):
+        dist = distance_xz(player.position, self.position)
+        if dist > 40:
+            return
+
+        self.health_bar.alpha = max(0, self.health_bar.alpha - time.dt)
+
+
+        self.look_at_2d(player.position, 'y')
+        hit_info = raycast(self.world_position + Vec3(0,1,0), self.forward, 30, ignore=(self,))
+        if hit_info.entity == player:
+            if dist > 2:
+                self.position += self.forward * time.dt * 5
+
+    @property
+    def hp(self):
+        return self._hp
+
+    @hp.setter
+    def hp(self, value):
+        self._hp = value
+        if value <= 0:
+            destroy(self)
+            return
+
+        self.health_bar.world_scale_x = self.hp / self.max_hp * 1.5
+        self.health_bar.alpha = 1
+
+# Enemy()
+enemies = [Enemy(x=x*4) for x in range(10)]
+
+def pause_input(key):
+    if key == 'tab':   # свободная камера ок ????
+        editor_camera.enabled = not editor_camera.enabled
+
+        player.visible_self = editor_camera.enabled
+        player.cursor.enabled = not editor_camera.enabled
+        gun.enabled = not editor_camera.enabled
+        mouse.locked = not editor_camera.enabled
+        editor_camera.position = player.position
+
+        application.paused = editor_camera.enabled
+
+pause_handler = Entity(ignore_paused=True, input=pause_input)
+
+
+
+
+
 
 app.run()
